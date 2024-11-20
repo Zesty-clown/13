@@ -1,5 +1,7 @@
 using System;
+using System.Data.SQLite;
 using System.IO;
+using System.Threading;
 
 public static class LoginPage
 {
@@ -18,6 +20,7 @@ public static class LoginPage
         Console.Write("Password: ");
         string password = MaskPassword();
 
+
         if (username == CorrectUsername && password == CorrectPassword)
         {
             SaveHWIDToDesktop();
@@ -28,7 +31,7 @@ public static class LoginPage
         }
         else
         {
-            Console.WriteLine("\nInvalid credentials. Try again.");
+            Console.WriteLine("\nInvalid credentials or token. Try again.");
             Thread.Sleep(2000); // Pause to show error message
             return AuthenticateUser();
         }
@@ -59,21 +62,62 @@ public static class LoginPage
         return password;
     }
 
+    private static bool ValidateToken(string token)
+    {
+        string databasePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "auth_tokens.db");
+
+        if (!File.Exists(databasePath))
+        {
+            Console.WriteLine("Token database not found.");
+            return false;
+        }
+
+        using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+        {
+            connection.Open();
+
+            string query = "SELECT expiration FROM tokens WHERE token = @token";
+            using (var command = new SQLiteCommand(query, connection))
+            {
+                command.Parameters.AddWithValue("@token", token);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (reader.Read())
+                    {
+                        long expiration = reader.GetInt64(0);
+                        if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() < expiration)
+                        {
+                            Console.WriteLine("Token is valid.");
+                            return true;
+                        }
+                        else
+                        {
+                            Console.WriteLine("Token has expired.");
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("Token not found.");
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
     private static string GetHWID()
     {
-        // Use machine name or another unique identifier as the HWID
-        return Environment.MachineName; // Alternatively: Guid.NewGuid().ToString();
+        return Environment.MachineName;
     }
 
     private static void SaveHWIDToDesktop()
     {
         string hwid = GetHWID();
 
-        // Get the desktop path
         string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
         string filePath = Path.Combine(desktopPath, "user_hwid.txt");
 
-        // Create the file and save HWID
         try
         {
             File.WriteAllText(filePath, hwid);
