@@ -1,39 +1,27 @@
 using System;
+using System.Collections.Generic;
+using System.Data.SQLite;
+using System.IO;
 using System.Threading;
 
 class Program1
 {
+    static Dictionary<int, string> loadouts = new Dictionary<int, string>(); // Key: slot number, Value: item name
+    static string[] weapons = { "AK-47", "LR300", "MP5A4", "SMG", "M249" };
+    static string[] items = { "Medkit", "Bandage", "Grenade" }; // Example additional items
+
     static void Main()
     {
-        // Ensure the login page runs first
         if (!LoginPage())
         {
             Console.WriteLine("Login failed. Exiting program...");
-            Thread.Sleep(2000); // Wait for 2 seconds before exiting
+            Thread.Sleep(2000);
             return;
         }
 
-        // Weapon options
-        string[] weapons = { "AK-47", "LR300", "MP5A4", "SMG", "M249" };
-        bool[] selectedWeapons = new bool[weapons.Length];
-        int selectedWeaponIndex = -1; // No weapon selected by default
-
-        // Settings options
-        string[] settings = {
-            "Randomizer X: 0  Y: 0",
-            "Recoil-Ctrl X: 100  Y: 100",
-            "AutoGunDetect: False",
-            "AutoModDetect: False",
-            "Burst-F Mode: False",
-            "S-RUN: False",
-            "RAPID: False",
-            "HIP-F: False",
-            "A-AFK: False"
-        };
-        bool[] toggledSettings = new bool[settings.Length]; // Track toggle state for settings
-
         int currentIndex = 0;
-        bool isSettingsMenu = false; // Tracks whether the user is in the settings menu
+        bool isSettingsMenu = false;
+        bool isLoadoutMenu = false;
         bool recoilThreadRunning = false;
         Thread recoilThread = null;
 
@@ -41,9 +29,11 @@ class Program1
         {
             Console.Clear();
             if (isSettingsMenu)
-                DrawSettingsMenu(settings, toggledSettings, currentIndex);
+                DrawSettingsMenu(currentIndex);
+            else if (isLoadoutMenu)
+                DrawLoadoutMenu(currentIndex);
             else
-                DrawInterface(weapons, selectedWeapons, selectedWeaponIndex, currentIndex);
+                DrawInterface(currentIndex);
 
             var key = Console.ReadKey(true).Key;
 
@@ -52,56 +42,60 @@ class Program1
                 case ConsoleKey.UpArrow:
                     currentIndex = Math.Max(currentIndex - 1, 0);
                     break;
-
                 case ConsoleKey.DownArrow:
-                    currentIndex = isSettingsMenu
-                        ? Math.Min(currentIndex + 1, settings.Length - 1)
-                        : Math.Min(currentIndex + 1, weapons.Length - 1);
+                    if (isSettingsMenu)
+                        currentIndex = Math.Min(currentIndex + 1, 7); // Assuming there are 8 settings
+                    else if (isLoadoutMenu)
+                        currentIndex = Math.Min(currentIndex + 1, weapons.Length + items.Length - 1);
+                    else
+                        currentIndex = Math.Min(currentIndex + 1, weapons.Length - 1);
                     break;
-
                 case ConsoleKey.Spacebar:
                     if (isSettingsMenu)
                     {
-                        // Toggle the current setting
-                        toggledSettings[currentIndex] = !toggledSettings[currentIndex];
-                        settings[currentIndex] = toggledSettings[currentIndex]
-                            ? settings[currentIndex].Replace("False", "True")
-                            : settings[currentIndex].Replace("True", "False");
+                        // Toggle setting
+                    }
+                    else if (isLoadoutMenu)
+                    {
+                        AssignLoadout(currentIndex);
                     }
                     else
                     {
-                        // Select or deselect weapon
-                        for (int i = 0; i < selectedWeapons.Length; i++)
-                            selectedWeapons[i] = false; // Deselect all weapons
-
-                        selectedWeapons[currentIndex] = true;
-                        selectedWeaponIndex = currentIndex;
+                        // Select weapon
+                        SelectWeapon(currentIndex);
                     }
                     break;
-
                 case ConsoleKey.Tab:
-                    isSettingsMenu = !isSettingsMenu; // Toggle between weapons and settings menu
-                    currentIndex = 0; // Reset index when switching menus
+                    if (isLoadoutMenu)
+                    {
+                        isLoadoutMenu = false;
+                        isSettingsMenu = false;
+                    }
+                    else if (isSettingsMenu)
+                    {
+                        isSettingsMenu = false;
+                        isLoadoutMenu = true;
+                    }
+                    else
+                    {
+                        isSettingsMenu = true;
+                        isLoadoutMenu = false;
+                    }
+                    currentIndex = 0;
                     break;
-
                 case ConsoleKey.Escape:
-                    // Ensure any running recoil thread is terminated before exiting
                     if (recoilThreadRunning && recoilThread != null && recoilThread.IsAlive)
                     {
                         recoilThread.Abort();
                     }
                     ExitProgram();
                     return;
-
-                case ConsoleKey.R when !isSettingsMenu:
-                    if (selectedWeaponIndex >= 0)
+                case ConsoleKey.R:
+                    if (!isSettingsMenu && !isLoadoutMenu && loadouts.ContainsValue("Selected Weapon"))
                     {
                         if (!recoilThreadRunning)
                         {
-                            recoilThread = new Thread(() =>
-                            {
-                                RecoilManager.SimulateRecoil(selectedWeaponIndex);
-                            });
+                            recoilThread = new Thread(() => RecoilManager.SimulateRecoil(Array.IndexOf(weapons, loadouts['Selected Weapon'])));
                             recoilThread.IsBackground = true;
                             recoilThread.Start();
                             recoilThreadRunning = true;
@@ -113,13 +107,11 @@ class Program1
                         Console.ReadKey();
                     }
                     break;
-
                 default:
                     break;
             }
 
-            // Check if the right mouse button is released to stop the recoil thread
-            if (recoilThreadRunning && (RecoilManager.IsRecoilActive() == false))
+            if (recoilThreadRunning && !RecoilManager.IsRecoilActive())
             {
                 recoilThreadRunning = false;
                 recoilThread = null;
@@ -127,9 +119,116 @@ class Program1
         }
     }
 
-    private static void DrawSettingsMenu(string[] settings, bool[] toggledSettings, int currentIndex)
+    static void DrawSettingsMenu(int currentIndex)
     {
-        throw new NotImplementedException();
+        Console.Title = "Rust No-Recoil Macro - Settings Menu";
+        Console.ForegroundColor = ConsoleColor.Red;
+
+        PrintBanner();
+
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.WriteLine("\n" + new string('═', 70));
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine("SETTINGS MENU".PadLeft(45));
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.WriteLine(new string('═', 70));
+
+        string[] settings = {
+            "Randomizer X: 0  Y: 0",
+            "Recoil-Ctrl X: 100  Y: 100",
+            "AutoGunDetect: False",
+            "AutoModDetect: False",
+            "Burst-F Mode: False",
+            "S-RUN: False",
+            "RAPID: False",
+            "HIP-F: False",
+            "A-AFK: False"
+        };
+
+        for (int i = 0; i < settings.Length; i++)
+        {
+            if (i == currentIndex) Console.BackgroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine(settings[i]);
+            Console.ResetColor();
+        }
+
+        Console.WriteLine("\n" + new string('═', 70));
+        Console.WriteLine("\nUse arrow keys to navigate, SPACE to toggle a setting.");
+        Console.WriteLine("Press TAB to switch to Loadout menu, ESC to exit.");
+    }
+
+    static void DrawLoadoutMenu(int currentIndex)
+    {
+        Console.Title = "Rust No-Recoil Macro - Loadout Menu";
+        Console.ForegroundColor = ConsoleColor.Red;
+
+        PrintBanner();
+
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.WriteLine("\n" + new string('═', 70));
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine("LOADOUT MENU".PadLeft(45));
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.WriteLine(new string('═', 70));
+
+        string[] allItems = new string[weapons.Length + items.Length];
+        weapons.CopyTo(allItems, 0);
+        items.CopyTo(allItems, weapons.Length);
+
+        for (int i = 0; i < allItems.Length; i++)
+        {
+            if (i == currentIndex) Console.BackgroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine(allItems[i]);
+            Console.ResetColor();
+        }
+
+        Console.WriteLine("\n" + new string('═', 70));
+        Console.WriteLine("\nUse arrow keys to navigate, SPACE to assign an item to a slot.");
+        Console.WriteLine("Press TAB to switch menus, ESC to exit.");
+    }
+
+    static void AssignLoadout(int itemIndex)
+    {
+        string[] allItems = new string[weapons.Length + items.Length];
+        weapons.CopyTo(allItems, 0);
+        items.CopyTo(allItems, weapons.Length);
+
+        Console.Clear();
+        Console.WriteLine("Enter slot number (1-9) to assign this item:");
+        string input = Console.ReadLine();
+
+        if (int.TryParse(input, out int slotNumber) && slotNumber >= 1 && slotNumber <= 9)
+        {
+            loadouts[slotNumber] = allItems[itemIndex];
+            Console.WriteLine($"Assigned {allItems[itemIndex]} to slot {slotNumber}.");
+        }
+        else
+        {
+            Console.WriteLine("Invalid slot number.");
+        }
+
+        Console.WriteLine("Press any key to return to the loadout menu...");
+        Console.ReadKey();
+    }
+
+    static void SelectWeapon(int currentIndex)
+    {
+        if (loadouts.ContainsValue("Selected Weapon"))
+        {
+            foreach (var key in loadouts.Keys)
+            {
+                if (loadouts[key] == "Selected Weapon")
+                {
+                    loadouts[key] = weapons[currentIndex];
+                    break;
+                }
+            }
+        }
+        else
+        {
+            loadouts[1] = weapons[currentIndex]; // Default to slot 1 if no weapon is currently selected
+        }
+        loadouts['Selected Weapon'] = weapons[currentIndex];
     }
 
     static bool LoginPage()
@@ -158,7 +257,7 @@ class Program1
             }
             else
             {
-                Console.WriteLine("\nInvalid credentials. Press ESC to exit or any other key to retry.");
+                Console.WriteLine("\nInvalid credentials or token. Press ESC to exit or any other key to retry.");
                 var key = Console.ReadKey(true).Key;
                 if (key == ConsoleKey.Escape)
                 {
@@ -193,15 +292,57 @@ class Program1
         return password;
     }
 
-    static void DrawInterface(string[] weapons, bool[] selectedWeapons, int selectedWeaponIndex, int currentIndex)
+    private static bool ValidateToken(string token)
+    {
+        string databasePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "auth_tokens.db");
+
+        if (!File.Exists(databasePath))
+        {
+            Console.WriteLine("Token database not found.");
+            return false;
+        }
+
+        using (var connection = new SQLiteConnection($"Data Source={databasePath};Version=3;"))
+        {
+            connection.Open();
+
+            string query = "SELECT expiration FROM tokens WHERE token = @token";
+            using (var command = new SQLiteCommand(query, connection))
+            {
+                command.Parameters.AddWithValue("@token", token);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (reader.Read())
+                    {
+                        long expiration = reader.GetInt64(0);
+                        if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() < expiration)
+                        {
+                            Console.WriteLine("Token is valid.");
+                            return true;
+                        }
+                        else
+                        {
+                            Console.WriteLine("Token has expired.");
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("Token not found.");
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    static void DrawInterface(int currentIndex)
     {
         Console.Title = "Rust No-Recoil Macro - Weapon Menu";
         Console.ForegroundColor = ConsoleColor.Red;
 
-        // Banner
         PrintBanner();
 
-        // Separator
         Console.ForegroundColor = ConsoleColor.White;
         Console.WriteLine("\n" + new string('═', 70));
         Console.ForegroundColor = ConsoleColor.Red;
@@ -209,18 +350,34 @@ class Program1
         Console.ForegroundColor = ConsoleColor.White;
         Console.WriteLine(new string('═', 70));
 
-        // Weapon List
         for (int i = 0; i < weapons.Length; i++)
         {
             if (i == currentIndex) Console.BackgroundColor = ConsoleColor.DarkGray;
-
-            Console.WriteLine($"[{(selectedWeapons[i] ? "x" : " ")}] {weapons[i]}");
+            Console.WriteLine($"[{(loadouts.ContainsValue(weapons[i]) ? "x" : " ")}] {weapons[i]}");
             Console.ResetColor();
         }
 
         Console.WriteLine("\n" + new string('═', 70));
+        DrawHotbar();
         Console.WriteLine("\nUse arrow keys to navigate, SPACE to select a weapon.");
-        Console.WriteLine("Press R to simulate recoil, TAB to switch to Settings menu, ESC to exit.");
+        Console.WriteLine("Press R to simulate recoil, TAB to switch menus, ESC to exit.");
+    }
+
+    static void DrawHotbar()
+    {
+        Console.WriteLine("\nHotbar:");
+        for (int i = 1; i <= 9; i++)
+        {
+            if (loadouts.ContainsKey(i))
+            {
+                Console.Write($"[{loadouts[i]}] ");
+            }
+            else
+            {
+                Console.Write("[] ");
+            }
+        }
+        Console.WriteLine();
     }
 
     static void ExitProgram()
